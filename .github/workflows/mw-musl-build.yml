@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fork-only build helper: the upstream release workflow builds glibc binaries,
+# which need GLIBC_2.33/2.34 and therefore cannot run on Alibaba Cloud Linux 3
+# (glibc 2.28). The deployment uses a static musl build instead; this workflow
+# produces one from any ref, without touching the upstream release matrix.
+name: mw-musl-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch or tag)"
+        required: true
+      version:
+        description: "Version label used in artifact names"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  musl:
+    name: x86_64-unknown-linux-musl
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build static binary
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          TARGET_CC: musl-gcc
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="llm-verify-${{ github.event.inputs.version }}-x86_64-unknown-linux-musl"
+          mkdir -p "dist/$name"
+          cp target/x86_64-unknown-linux-musl/release/llm-verify "dist/$name/"
+          cp README.md README.zh-CN.md LICENSE SECURITY.md SECURITY.zh-CN.md "dist/$name/"
+          tar czf "dist/$name.tar.gz" -C dist "$name"
+          sha256sum "dist/$name.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mw-musl
+          path: dist/*.tar.gz
+          retention-days: 7
